@@ -1,501 +1,501 @@
 var Simulator = (function () {
-    'use strict';
+	'use strict';
 
-    var PRESSURE_JACOBI_ITERATIONS = 2;
+	var PRESSURE_JACOBI_ITERATIONS = 2;
 
-    var FRAMES_TO_SIMULATE = 60; //how many frames to simulate the area induced by each splat for
+	var FRAMES_TO_SIMULATE = 60; //how many frames to simulate the area induced by each splat for
 
-    var SPLAT_PADDING = 4.5; //approximately sqrt(BRISTLE_LENGTH * BRISTLE_LENGTH - BRUSH_HEIGHT * BRUSH_HEIGHT)
-    var SPEED_PADDING = 1.1;
+	var SPLAT_PADDING = 4.5; //approximately sqrt(BRISTLE_LENGTH * BRISTLE_LENGTH - BRUSH_HEIGHT * BRUSH_HEIGHT)
+	var SPEED_PADDING = 1.1;
 
 
-    function SplatArea (rectangle, frameNumber) {
-        this.rectangle = rectangle;
-        this.frameNumber = frameNumber;
-    }
+	function SplatArea (rectangle, frameNumber) {
+		this.rectangle = rectangle;
+		this.frameNumber = frameNumber;
+	}
 
-    function Simulator (wgl, shaderSources, resolutionWidth, resolutionHeight) {
-        this.wgl = wgl;
+	function Simulator (wgl, shaderSources, resolutionWidth, resolutionHeight) {
+		this.wgl = wgl;
 
-        wgl.getExtension('OES_texture_float');
-        wgl.getExtension('OES_texture_float_linear');
+		wgl.getExtension('OES_texture_float');
+		wgl.getExtension('OES_texture_float_linear');
 
 
 
-        var halfFloatExt = wgl.getExtension('OES_texture_half_float');
-        var halfFloatLinearExt = wgl.getExtension('OES_texture_half_float_linear');
+		var halfFloatExt = wgl.getExtension('OES_texture_half_float');
+		var halfFloatLinearExt = wgl.getExtension('OES_texture_half_float_linear');
 
 
-        this.simulationTextureType = wgl.hasHalfFloatTextureSupport() ? halfFloatExt.HALF_FLOAT_OES : wgl.FLOAT; //use float if half float not available
+		this.simulationTextureType = wgl.hasHalfFloatTextureSupport() ? halfFloatExt.HALF_FLOAT_OES : wgl.FLOAT; //use float if half float not available
 
 
-        this.resolutionWidth = resolutionWidth;
-        this.resolutionHeight = resolutionHeight;
+		this.resolutionWidth = resolutionWidth;
+		this.resolutionHeight = resolutionHeight;
 
-        this.fluidity = 0.8;
+		this.fluidity = 0.8;
 
-        this.frameNumber = 0;
+		this.frameNumber = 0;
 
-       
 
-        this.splatAreas = []; //the splat areas that we're currently still simulating
-        //more recent are at the front of the array
 
+		this.splatAreas = []; //the splat areas that we're currently still simulating
+		//more recent are at the front of the array
 
 
-        //////////////////////////////////////////////////
-        // create shader programs
 
-        this.splatProgram = wgl.createProgram(
-            shaderSources['shaders/splat.vert'], shaderSources['shaders/splat.frag']);
+		//////////////////////////////////////////////////
+		// create shader programs
 
-        this.velocitySplatProgram = wgl.createProgram(
-            '#define VELOCITY \n' + shaderSources['shaders/splat.vert'], '#define VELOCITY \n' + shaderSources['shaders/splat.frag']);
+		this.splatProgram = wgl.createProgram(
+			shaderSources['shaders/splat.vert'], shaderSources['shaders/splat.frag']);
 
-        this.advectProgram = wgl.createProgram(
-            shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/advect.frag']);
+		this.velocitySplatProgram = wgl.createProgram(
+			'#define VELOCITY \n' + shaderSources['shaders/splat.vert'], '#define VELOCITY \n' + shaderSources['shaders/splat.frag']);
 
-        this.divergenceProgram = wgl.createProgram(
-            shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/divergence.frag']);
+		this.advectProgram = wgl.createProgram(
+			shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/advect.frag']);
 
-        this.jacobiProgram = wgl.createProgram(
-            shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/jacobi.frag']);
+		this.divergenceProgram = wgl.createProgram(
+			shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/divergence.frag']);
 
-        this.subtractProgram = wgl.createProgram(
-            shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/subtract.frag']);
+		this.jacobiProgram = wgl.createProgram(
+			shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/jacobi.frag']);
 
-        this.copyProgram = wgl.createProgram(
-            shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/output.frag']);
+		this.subtractProgram = wgl.createProgram(
+			shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/subtract.frag']);
 
-        this.resizeProgram = wgl.createProgram(
-            shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/resize.frag']);
+		this.copyProgram = wgl.createProgram(
+			shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/output.frag']);
 
-        
-        ///////////////////////////////////////////////
-        // create buffers
+		this.resizeProgram = wgl.createProgram(
+			shaderSources['shaders/fullscreen.vert'], shaderSources['shaders/resize.frag']);
 
-        this.quadVertexBuffer = wgl.createBuffer();
-        wgl.bufferData(this.quadVertexBuffer, wgl.ARRAY_BUFFER, new Float32Array([-1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0]), wgl.STATIC_DRAW);
 
-        this.splatPositionsBuffer = wgl.createBuffer();
-        this.splatVelocitiesBuffer = wgl.createBuffer();
+		///////////////////////////////////////////////
+		// create buffers
 
+		this.quadVertexBuffer = wgl.createBuffer();
+		wgl.bufferData(this.quadVertexBuffer, wgl.ARRAY_BUFFER, new Float32Array([-1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0]), wgl.STATIC_DRAW);
 
+		this.splatPositionsBuffer = wgl.createBuffer();
+		this.splatVelocitiesBuffer = wgl.createBuffer();
 
-        this.simulationFramebuffer = wgl.createFramebuffer();
 
 
-        //create textures
+		this.simulationFramebuffer = wgl.createFramebuffer();
 
-        this.paintTexture = wgl.buildTexture(wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        this.paintTextureTemp = wgl.buildTexture(wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
-        this.velocityTexture = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        this.velocityTextureTemp = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		//create textures
 
-        this.divergenceTexture = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
-        this.pressureTexture = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		this.paintTexture = wgl.buildTexture(wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		this.paintTextureTemp = wgl.buildTexture(wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
-        
-        this.pressureTextureTemp = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		this.velocityTexture = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		this.velocityTextureTemp = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
-        this.clearTextures([this.paintTexture, this.paintTextureTemp, this.velocityTexture, this.velocityTextureTemp, this.divergenceTexture, this.pressureTexture, this.pressureTextureTemp]);
-    }
+		this.divergenceTexture = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		this.pressureTexture = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
-    Simulator.prototype.clearTextures = function (textures) {
-        var wgl = this.wgl;
 
-        for (var i = 0; i < textures.length; ++i) {
-            wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, textures[i], 0);
+		this.pressureTextureTemp = wgl.buildTexture(wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
-            wgl.clear(
-                wgl.createClearState().bindFramebuffer(this.simulationFramebuffer),
-                wgl.COLOR_BUFFER_BIT);
-        }
-    };
+		this.clearTextures([this.paintTexture, this.paintTextureTemp, this.velocityTexture, this.velocityTextureTemp, this.divergenceTexture, this.pressureTexture, this.pressureTextureTemp]);
+	}
 
-    Simulator.prototype.clear = function () {
-        this.clearTextures([this.paintTexture, this.paintTextureTemp]);
-    };
+	Simulator.prototype.clearTextures = function (textures) {
+		var wgl = this.wgl;
 
-    Simulator.prototype.copyTexture = function (destinationWidth, destinationHeight, sourceTexture, destinationTexture) {
-        var copyDrawState = wgl.createDrawState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(0, 0, destinationWidth, destinationHeight)
-            .useProgram(this.copyProgram)
+		for (var i = 0; i < textures.length; ++i) {
+			wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, textures[i], 0);
 
-            .uniformTexture('u_input', 0, wgl.TEXTURE_2D, sourceTexture)
+			wgl.clear(
+				wgl.createClearState().bindFramebuffer(this.simulationFramebuffer),
+				wgl.COLOR_BUFFER_BIT);
+		}
+	};
 
-            .vertexAttribPointer(this.quadVertexBuffer, this.copyProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
+	Simulator.prototype.clear = function () {
+		this.clearTextures([this.paintTexture, this.paintTextureTemp]);
+	};
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, destinationTexture, 0);
-        wgl.drawArrays(copyDrawState, wgl.TRIANGLE_STRIP, 0, 4);
-    };
+	Simulator.prototype.copyTexture = function (destinationWidth, destinationHeight, sourceTexture, destinationTexture) {
+		var copyDrawState = wgl.createDrawState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(0, 0, destinationWidth, destinationHeight)
+			.useProgram(this.copyProgram)
 
-    //resizes the canvas with direct texel correspondence, offsetting the previous painting
-    Simulator.prototype.resize = function (newWidth, newHeight, offsetX, offsetY, featherSize) {
-        var wgl = this.wgl;
+			.uniformTexture('u_input', 0, wgl.TEXTURE_2D, sourceTexture)
 
+			.vertexAttribPointer(this.quadVertexBuffer, this.copyProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
-        var resizeDrawState = wgl.createDrawState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(0, 0, newWidth, newHeight)
-            .useProgram(this.resizeProgram)
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, destinationTexture, 0);
+		wgl.drawArrays(copyDrawState, wgl.TRIANGLE_STRIP, 0, 4);
+	};
 
-            .uniformTexture('u_paintTexture', 0, wgl.TEXTURE_2D, this.paintTexture)
-            .uniform2f('u_oldResolution', this.resolutionWidth, this.resolutionHeight)
-            .uniform2f('u_offset', offsetX, offsetY)
-            .uniform1f('u_featherSize', featherSize)
+	//resizes the canvas with direct texel correspondence, offsetting the previous painting
+	Simulator.prototype.resize = function (newWidth, newHeight, offsetX, offsetY, featherSize) {
+		var wgl = this.wgl;
 
-            .vertexAttribPointer(this.quadVertexBuffer, this.resizeProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
+		var resizeDrawState = wgl.createDrawState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(0, 0, newWidth, newHeight)
+			.useProgram(this.resizeProgram)
 
-        wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, newWidth, newHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+			.uniformTexture('u_paintTexture', 0, wgl.TEXTURE_2D, this.paintTexture)
+			.uniform2f('u_oldResolution', this.resolutionWidth, this.resolutionHeight)
+			.uniform2f('u_offset', offsetX, offsetY)
+			.uniform1f('u_featherSize', featherSize)
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.paintTextureTemp, 0);
-        wgl.drawArrays(resizeDrawState, wgl.TRIANGLE_STRIP, 0, 4);
+			.vertexAttribPointer(this.quadVertexBuffer, this.resizeProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
-        Utilities.swap(this, 'paintTexture', 'paintTextureTemp');
 
+		wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, newWidth, newHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.paintTextureTemp, 0);
+		wgl.drawArrays(resizeDrawState, wgl.TRIANGLE_STRIP, 0, 4);
 
+		Utilities.swap(this, 'paintTexture', 'paintTextureTemp');
 
-        this.resolutionWidth = newWidth;
-        this.resolutionHeight = newHeight;
 
 
-        wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        this.copyTexture(newWidth, newHeight, this.paintTexture, this.paintTextureTemp);
 
+		this.resolutionWidth = newWidth;
+		this.resolutionHeight = newHeight;
 
-        wgl.rebuildTexture(this.velocityTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        wgl.rebuildTexture(this.velocityTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
-        wgl.rebuildTexture(this.divergenceTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		this.copyTexture(newWidth, newHeight, this.paintTexture, this.paintTextureTemp);
 
-        wgl.rebuildTexture(this.pressureTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
-        wgl.rebuildTexture(this.pressureTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
-        
-        
-        this.clearTextures([this.velocityTexture, this.velocityTextureTemp, this.divergenceTexture, this.pressureTexture, this.pressureTextureTemp]);
-    };
 
-    //resamples the whole painting
-    Simulator.prototype.changeResolution = function (newWidth, newHeight) {
-        var wgl = this.wgl;
+		wgl.rebuildTexture(this.velocityTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		wgl.rebuildTexture(this.velocityTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
+		wgl.rebuildTexture(this.divergenceTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
-        wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, newWidth, newHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        this.copyTexture(newWidth, newHeight, this.paintTexture, this.paintTextureTemp);
-        Utilities.swap(this, 'paintTexture', 'paintTextureTemp');
+		wgl.rebuildTexture(this.pressureTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		wgl.rebuildTexture(this.pressureTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
-        this.resolutionWidth = newWidth;
-        this.resolutionHeight = newHeight;
 
+		this.clearTextures([this.velocityTexture, this.velocityTextureTemp, this.divergenceTexture, this.pressureTexture, this.pressureTextureTemp]);
+	};
 
-        wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        this.copyTexture(newWidth, newHeight, this.paintTexture, this.paintTextureTemp);
+	//resamples the whole painting
+	Simulator.prototype.changeResolution = function (newWidth, newHeight) {
+		var wgl = this.wgl;
 
 
-        wgl.rebuildTexture(this.velocityTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
-        wgl.rebuildTexture(this.velocityTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, newWidth, newHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		this.copyTexture(newWidth, newHeight, this.paintTexture, this.paintTextureTemp);
+		Utilities.swap(this, 'paintTexture', 'paintTextureTemp');
 
-        wgl.rebuildTexture(this.divergenceTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		this.resolutionWidth = newWidth;
+		this.resolutionHeight = newHeight;
 
-        wgl.rebuildTexture(this.pressureTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
-        wgl.rebuildTexture(this.pressureTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
+		wgl.rebuildTexture(this.paintTextureTemp, wgl.RGBA, wgl.FLOAT, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		this.copyTexture(newWidth, newHeight, this.paintTexture, this.paintTextureTemp);
 
-        this.clearTextures([this.velocityTexture, this.velocityTextureTemp, this.divergenceTexture, this.pressureTexture, this.pressureTextureTemp]);
-    };
 
+		wgl.rebuildTexture(this.velocityTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
+		wgl.rebuildTexture(this.velocityTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.LINEAR, wgl.LINEAR);
 
-    //assumes destination texture has dimensions resolutionWidth x resolutionHeight
-    Simulator.prototype.copyPaintTexture = function (destinationTexture) {
-        this.copyTexture(this.resolutionWidth, this.resolutionHeight, this.paintTexture, destinationTexture);
-    };
+		wgl.rebuildTexture(this.divergenceTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
-    Simulator.prototype.applyPaintTexture = function (texture) {
-        this.copyTexture(this.resolutionWidth, this.resolutionHeight, texture, this.paintTexture);
-        this.copyTexture(this.resolutionWidth, this.resolutionHeight, texture, this.paintTextureTemp);
+		wgl.rebuildTexture(this.pressureTexture, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
+		wgl.rebuildTexture(this.pressureTextureTemp, wgl.RGBA, this.simulationTextureType, this.resolutionWidth, this.resolutionHeight, null, wgl.CLAMP_TO_EDGE, wgl.CLAMP_TO_EDGE, wgl.NEAREST, wgl.NEAREST);
 
-        this.clearTextures([this.velocityTexture, this.velocityTextureTemp]);
-    };
 
-    //returns the area we're currently simulating
-    Simulator.prototype.getSimulationArea = function () {
-        var simulationBorder = 0;
+		this.clearTextures([this.velocityTexture, this.velocityTextureTemp, this.divergenceTexture, this.pressureTexture, this.pressureTextureTemp]);
+	};
 
-        //now let's work out the total simulation area we need to simulate
-        var simulationArea = this.splatAreas[0].rectangle.clone(); //start with the first rectangle
 
-        for (var i = 1; i < this.splatAreas.length; ++i) { //and add the others
-            var splatArea = this.splatAreas[i];
-            var area = splatArea.rectangle.clone();
+	//assumes destination texture has dimensions resolutionWidth x resolutionHeight
+	Simulator.prototype.copyPaintTexture = function (destinationTexture) {
+		this.copyTexture(this.resolutionWidth, this.resolutionHeight, this.paintTexture, destinationTexture);
+	};
 
-            simulationArea.includeRectangle(area);
-        }
+	Simulator.prototype.applyPaintTexture = function (texture) {
+		this.copyTexture(this.resolutionWidth, this.resolutionHeight, texture, this.paintTexture);
+		this.copyTexture(this.resolutionWidth, this.resolutionHeight, texture, this.paintTextureTemp);
 
-        simulationArea.round();
-        simulationArea.intersectRectangle(new Rectangle(0, 0, this.resolutionWidth, this.resolutionHeight));
+		this.clearTextures([this.velocityTexture, this.velocityTextureTemp]);
+	};
 
-        return simulationArea;
-    };
+	//returns the area we're currently simulating
+	Simulator.prototype.getSimulationArea = function () {
+		var simulationBorder = 0;
 
-    Simulator.prototype.splat = function (brush, zThreshold, paintingRectangle, splatColor, splatRadius, velocityScale) {
+		//now let's work out the total simulation area we need to simulate
+		var simulationArea = this.splatAreas[0].rectangle.clone(); //start with the first rectangle
 
-        //the area we need to simulate for this set of splats
-        var brushPadding = Math.ceil(brush.scale * SPLAT_PADDING);
-        brushPadding += Math.ceil(brush.getFilteredSpeed() * SPEED_PADDING);
+		for (var i = 1; i < this.splatAreas.length; ++i) { //and add the others
+			var splatArea = this.splatAreas[i];
+			var area = splatArea.rectangle.clone();
 
-        //we start in canvas space
-        var area = new Rectangle(brush.positionX - brushPadding, brush.positionY - brushPadding, brushPadding * 2, brushPadding * 2);
-        
-        //transform into simulation space
-        area.translate(-paintingRectangle.left, -paintingRectangle.bottom);
-        area.scale(this.resolutionWidth / paintingRectangle.width, this.resolutionHeight / paintingRectangle.height);
-        area.round();
-        area.intersectRectangle(new Rectangle(0, 0, this.resolutionWidth, this.resolutionHeight));
+			simulationArea.includeRectangle(area);
+		}
 
-        this.splatAreas.splice(0, 0, new SplatArea(area, this.frameNumber));
+		simulationArea.round();
+		simulationArea.intersectRectangle(new Rectangle(0, 0, this.resolutionWidth, this.resolutionHeight));
 
-        var simulationArea = this.getSimulationArea();
+		return simulationArea;
+	};
 
+	Simulator.prototype.splat = function (brush, zThreshold, paintingRectangle, splatColor, splatRadius, velocityScale) {
 
-        var wgl = this.wgl;
+		//the area we need to simulate for this set of splats
+		var brushPadding = Math.ceil(brush.scale * SPLAT_PADDING);
+		brushPadding += Math.ceil(brush.getFilteredSpeed() * SPEED_PADDING);
 
+		//we start in canvas space
+		var area = new Rectangle(brush.positionX - brushPadding, brush.positionY - brushPadding, brushPadding * 2, brushPadding * 2);
 
-        /*
-        var clearState = wgl.createClearState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .clearColor(Math.sin(this.frameNumber * 0.1) * 0.5 + 0.5, 1, 1, 1)
-            
-            //restrict splatting to area that'll be simulated
-            .enable(wgl.SCISSOR_TEST)
-            .scissor(Math.floor(simulationArea.left), Math.floor(simulationArea.bottom), Math.floor(simulationArea.width), Math.floor(simulationArea.height))
+		//transform into simulation space
+		area.translate(-paintingRectangle.left, -paintingRectangle.bottom);
+		area.scale(this.resolutionWidth / paintingRectangle.width, this.resolutionHeight / paintingRectangle.height);
+		area.round();
+		area.intersectRectangle(new Rectangle(0, 0, this.resolutionWidth, this.resolutionHeight));
 
+		this.splatAreas.splice(0, 0, new SplatArea(area, this.frameNumber));
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.paintTexture, 0);
-        wgl.clear(clearState, wgl.COLOR_BUFFER_BIT);
-        */
+		var simulationArea = this.getSimulationArea();
 
 
-        var splatPaintDrawState = wgl.createDrawState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(0, 0, this.resolutionWidth, this.resolutionHeight)
-            
-            //restrict splatting to area that'll be simulated
-            .enable(wgl.SCISSOR_TEST)
-            .scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+		var wgl = this.wgl;
 
-            .enable(wgl.BLEND)
-            .blendEquation(wgl.FUNC_ADD)
-            .blendFuncSeparate(wgl.SRC_ALPHA, wgl.ONE_MINUS_SRC_ALPHA, wgl.ONE, wgl.ONE)
 
-            .vertexAttribPointer(brush.splatCoordinatesBuffer, this.splatProgram.getAttribLocation('a_splatCoordinates'), 4, wgl.FLOAT, wgl.FALSE, 0, 0)
-            .bindIndexBuffer(brush.splatIndexBuffer)
+		/*
+		var clearState = wgl.createClearState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.clearColor(Math.sin(this.frameNumber * 0.1) * 0.5 + 0.5, 1, 1, 1)
 
-            .useProgram(this.splatProgram)
+			//restrict splatting to area that'll be simulated
+			.enable(wgl.SCISSOR_TEST)
+			.scissor(Math.floor(simulationArea.left), Math.floor(simulationArea.bottom), Math.floor(simulationArea.width), Math.floor(simulationArea.height))
 
-            .uniform2f('u_paintingDimensions', paintingRectangle.width, paintingRectangle.height)
-            .uniform2f('u_paintingPosition', paintingRectangle.left, paintingRectangle.bottom)
-            .uniform1f('u_splatRadius', splatRadius)
-            .uniform4f('u_splatColor', splatColor[0], splatColor[1], splatColor[2], splatColor[3])
-            .uniformTexture('u_positionsTexture', 0, wgl.TEXTURE_2D, brush.positionsTexture)
-            .uniformTexture('u_previousPositionsTexture', 1, wgl.TEXTURE_2D, brush.previousPositionsTexture)
-            .uniform1f('u_zThreshold', zThreshold);
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.paintTexture, 0);
-        wgl.drawElements(splatPaintDrawState, wgl.TRIANGLES, brush.splatIndexCount * brush.bristleCount / brush.maxBristleCount, wgl.UNSIGNED_SHORT, 0);
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.paintTexture, 0);
+		wgl.clear(clearState, wgl.COLOR_BUFFER_BIT);
+		*/
 
 
+		var splatPaintDrawState = wgl.createDrawState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(0, 0, this.resolutionWidth, this.resolutionHeight)
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.velocityTexture, 0);
+			//restrict splatting to area that'll be simulated
+			.enable(wgl.SCISSOR_TEST)
+			.scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
-        var splatVelocityDrawState = wgl.createDrawState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(0, 0, this.resolutionWidth, this.resolutionHeight)
+			.enable(wgl.BLEND)
+			.blendEquation(wgl.FUNC_ADD)
+			.blendFuncSeparate(wgl.SRC_ALPHA, wgl.ONE_MINUS_SRC_ALPHA, wgl.ONE, wgl.ONE)
 
-            //restrict splatting to area that'll be simulated
-            .enable(wgl.SCISSOR_TEST)
-            .scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+			.vertexAttribPointer(brush.splatCoordinatesBuffer, this.splatProgram.getAttribLocation('a_splatCoordinates'), 4, wgl.FLOAT, wgl.FALSE, 0, 0)
+			.bindIndexBuffer(brush.splatIndexBuffer)
 
-            .enable(wgl.BLEND)
-            .blendEquation(wgl.FUNC_ADD)
-            .blendFuncSeparate(wgl.ONE, wgl.ONE, wgl.ZERO, wgl.ZERO)
+			.useProgram(this.splatProgram)
 
-            .vertexAttribPointer(brush.splatCoordinatesBuffer, this.splatProgram.getAttribLocation('a_splatCoordinates'), 4, wgl.FLOAT, wgl.FALSE, 0, 0)
-            .bindIndexBuffer(brush.splatIndexBuffer)
-            .useProgram(this.velocitySplatProgram)
+			.uniform2f('u_paintingDimensions', paintingRectangle.width, paintingRectangle.height)
+			.uniform2f('u_paintingPosition', paintingRectangle.left, paintingRectangle.bottom)
+			.uniform1f('u_splatRadius', splatRadius)
+			.uniform4f('u_splatColor', splatColor[0], splatColor[1], splatColor[2], splatColor[3])
+			.uniformTexture('u_positionsTexture', 0, wgl.TEXTURE_2D, brush.positionsTexture)
+			.uniformTexture('u_previousPositionsTexture', 1, wgl.TEXTURE_2D, brush.previousPositionsTexture)
+			.uniform1f('u_zThreshold', zThreshold);
 
-            .uniform2f('u_paintingDimensions', paintingRectangle.width, paintingRectangle.height)
-            .uniform2f('u_paintingPosition', paintingRectangle.left, paintingRectangle.bottom)
-            .uniform1f('u_splatRadius', splatRadius)
-            .uniformTexture('u_positionsTexture', 0, wgl.TEXTURE_2D, brush.positionsTexture)
-            .uniformTexture('u_previousPositionsTexture', 1, wgl.TEXTURE_2D, brush.previousPositionsTexture)
-            .uniformTexture('u_velocitiesTexture', 2, wgl.TEXTURE_2D, brush.velocitiesTexture)
-            .uniformTexture('u_previousVelocitiesTexture', 3, wgl.TEXTURE_2D, brush.previousVelocitiesTexture)
-            .uniform1f('u_zThreshold', zThreshold)
-            .uniform1f('u_velocityScale', velocityScale);
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.paintTexture, 0);
+		wgl.drawElements(splatPaintDrawState, wgl.TRIANGLES, brush.splatIndexCount * brush.bristleCount / brush.maxBristleCount, wgl.UNSIGNED_SHORT, 0);
 
-        wgl.drawElements(splatVelocityDrawState, wgl.TRIANGLES, brush.splatIndexCount * brush.bristleCount / brush.maxBristleCount, wgl.UNSIGNED_SHORT, 0);
 
-    };
 
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.velocityTexture, 0);
 
-    //returns whether any simulating actually took place
-    Simulator.prototype.simulate = function () {
-        var wgl = this.wgl;
+		var splatVelocityDrawState = wgl.createDrawState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(0, 0, this.resolutionWidth, this.resolutionHeight)
 
+			//restrict splatting to area that'll be simulated
+			.enable(wgl.SCISSOR_TEST)
+			.scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
-        if (this.splatAreas.length === 0) return false;
+			.enable(wgl.BLEND)
+			.blendEquation(wgl.FUNC_ADD)
+			.blendFuncSeparate(wgl.ONE, wgl.ONE, wgl.ZERO, wgl.ZERO)
 
-        var simulationArea = this.getSimulationArea();
+			.vertexAttribPointer(brush.splatCoordinatesBuffer, this.splatProgram.getAttribLocation('a_splatCoordinates'), 4, wgl.FLOAT, wgl.FALSE, 0, 0)
+			.bindIndexBuffer(brush.splatIndexBuffer)
+			.useProgram(this.velocitySplatProgram)
 
-        var advect = (function (velocityTexture, dataTexture, targetTexture, deltaTime, dissipation) {
-            var advectDrawState = wgl.createDrawState()
-                .bindFramebuffer(this.simulationFramebuffer)
-                .viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+			.uniform2f('u_paintingDimensions', paintingRectangle.width, paintingRectangle.height)
+			.uniform2f('u_paintingPosition', paintingRectangle.left, paintingRectangle.bottom)
+			.uniform1f('u_splatRadius', splatRadius)
+			.uniformTexture('u_positionsTexture', 0, wgl.TEXTURE_2D, brush.positionsTexture)
+			.uniformTexture('u_previousPositionsTexture', 1, wgl.TEXTURE_2D, brush.previousPositionsTexture)
+			.uniformTexture('u_velocitiesTexture', 2, wgl.TEXTURE_2D, brush.velocitiesTexture)
+			.uniformTexture('u_previousVelocitiesTexture', 3, wgl.TEXTURE_2D, brush.previousVelocitiesTexture)
+			.uniform1f('u_zThreshold', zThreshold)
+			.uniform1f('u_velocityScale', velocityScale);
 
-                .enable(wgl.SCISSOR_TEST)
-                .scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
-                
-                .useProgram(this.advectProgram)
-                .uniform1f('u_dissipation', dissipation)
-                .uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
-                .uniformTexture('u_velocityTexture', 0, wgl.TEXTURE_2D, velocityTexture)
-                .uniformTexture('u_inputTexture', 1, wgl.TEXTURE_2D, dataTexture)
+		wgl.drawElements(splatVelocityDrawState, wgl.TRIANGLES, brush.splatIndexCount * brush.bristleCount / brush.maxBristleCount, wgl.UNSIGNED_SHORT, 0);
 
-                .uniform2f('u_min', simulationArea.left, simulationArea.bottom)
-                .uniform2f('u_max', simulationArea.getRight(), simulationArea.getTop())
+	};
 
-                .vertexAttribPointer(this.quadVertexBuffer, this.advectProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
+	//returns whether any simulating actually took place
+	Simulator.prototype.simulate = function () {
+		var wgl = this.wgl;
 
-            
-            wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, targetTexture, 0);
-            advectDrawState.uniform1f('u_deltaTime', deltaTime);
 
-            wgl.drawArrays(advectDrawState, wgl.TRIANGLE_STRIP, 0, 4);
+		if (this.splatAreas.length === 0) return false;
 
+		var simulationArea = this.getSimulationArea();
 
-        }).bind(this);
+		var advect = (function (velocityTexture, dataTexture, targetTexture, deltaTime, dissipation) {
+			var advectDrawState = wgl.createDrawState()
+				.bindFramebuffer(this.simulationFramebuffer)
+				.viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
+				.enable(wgl.SCISSOR_TEST)
+				.scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
-        ////////////////////////////////////////
-        // advect velocity and paint
+				.useProgram(this.advectProgram)
+				.uniform1f('u_dissipation', dissipation)
+				.uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
+				.uniformTexture('u_velocityTexture', 0, wgl.TEXTURE_2D, velocityTexture)
+				.uniformTexture('u_inputTexture', 1, wgl.TEXTURE_2D, dataTexture)
 
-        var DELTA_TIME = 1.0 / 60.0; //we use a constant timestep for simulation consistency
+				.uniform2f('u_min', simulationArea.left, simulationArea.bottom)
+				.uniform2f('u_max', simulationArea.getRight(), simulationArea.getTop())
 
+				.vertexAttribPointer(this.quadVertexBuffer, this.advectProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
-         //compute divergence for pressure projection
 
-        var divergenceDrawState = wgl.createDrawState()
-            
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
-            .enable(wgl.SCISSOR_TEST)
-            .scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+			wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, targetTexture, 0);
+			advectDrawState.uniform1f('u_deltaTime', deltaTime);
 
-            .useProgram(this.divergenceProgram)
-            .uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
-            .uniformTexture('u_velocityTexture', 0, wgl.TEXTURE_2D, this.velocityTexture)
+			wgl.drawArrays(advectDrawState, wgl.TRIANGLE_STRIP, 0, 4);
 
-            .vertexAttribPointer(this.quadVertexBuffer, this.divergenceProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
+		}).bind(this);
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.divergenceTexture, 0);
-        
-        wgl.drawArrays(divergenceDrawState, wgl.TRIANGLE_STRIP, 0, 4);
-        
-        
-        //compute pressure via jacobi iteration
 
-        var jacobiDrawState = wgl.createDrawState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+		////////////////////////////////////////
+		// advect velocity and paint
 
-            .enable(wgl.SCISSOR_TEST)
-            .scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+		var DELTA_TIME = 1.0 / 60.0; //we use a constant timestep for simulation consistency
 
-            .useProgram(this.jacobiProgram)
-            .uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
-            .uniformTexture('u_divergenceTexture', 1, wgl.TEXTURE_2D, this.divergenceTexture)
 
-            .vertexAttribPointer(this.quadVertexBuffer, this.jacobiProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
+		 //compute divergence for pressure projection
 
+		var divergenceDrawState = wgl.createDrawState()
 
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.pressureTexture, 0);
-            wgl.clear(
-                wgl.createClearState().bindFramebuffer(this.simulationFramebuffer),
-                wgl.COLOR_BUFFER_BIT);
-        
-        for (var i = 0; i < PRESSURE_JACOBI_ITERATIONS; ++i) {
-            wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.pressureTextureTemp, 0);
-            jacobiDrawState.uniformTexture('u_pressureTexture', 0, wgl.TEXTURE_2D, this.pressureTexture);
-            
-            wgl.drawArrays(jacobiDrawState, wgl.TRIANGLE_STRIP, 0, 4);
-            
-            Utilities.swap(this, 'pressureTexture', 'pressureTextureTemp');
-        }
-        
-        
-        //subtract pressure gradient from velocity
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
-        var subtractDrawState = wgl.createDrawState()
-            .bindFramebuffer(this.simulationFramebuffer)
-            .viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+			.enable(wgl.SCISSOR_TEST)
+			.scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
-            .enable(wgl.SCISSOR_TEST)
-            .scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+			.useProgram(this.divergenceProgram)
+			.uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
+			.uniformTexture('u_velocityTexture', 0, wgl.TEXTURE_2D, this.velocityTexture)
 
-            .useProgram(this.subtractProgram)
-            .uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
-            .uniformTexture('u_pressureTexture', 0, wgl.TEXTURE_2D, this.pressureTexture)
-            .uniformTexture('u_velocityTexture', 1, wgl.TEXTURE_2D, this.velocityTexture)
+			.vertexAttribPointer(this.quadVertexBuffer, this.divergenceProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
-            .vertexAttribPointer(this.quadVertexBuffer, this.subtractProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
-        
-        wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.velocityTextureTemp, 0);
-        
-        wgl.drawArrays(subtractDrawState, wgl.TRIANGLE_STRIP, 0, 4);
-        
-        Utilities.swap(this, 'velocityTexture', 'velocityTextureTemp');
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.divergenceTexture, 0);
 
+		wgl.drawArrays(divergenceDrawState, wgl.TRIANGLE_STRIP, 0, 4);
 
 
-        //advect paint
-        advect(this.velocityTexture, this.paintTexture, this.paintTextureTemp, DELTA_TIME, 1.0);
-        Utilities.swap(this, 'paintTexture', 'paintTextureTemp');
+		//compute pressure via jacobi iteration
 
-        //advect velocity
-        advect(this.velocityTexture, this.velocityTexture, this.velocityTextureTemp, DELTA_TIME, this.fluidity);
-        Utilities.swap(this, 'velocityTexture', 'velocityTextureTemp');
+		var jacobiDrawState = wgl.createDrawState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
+			.enable(wgl.SCISSOR_TEST)
+			.scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
 
+			.useProgram(this.jacobiProgram)
+			.uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
+			.uniformTexture('u_divergenceTexture', 1, wgl.TEXTURE_2D, this.divergenceTexture)
 
-        this.frameNumber += 1;
+			.vertexAttribPointer(this.quadVertexBuffer, this.jacobiProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
 
-        //remove all of the splat areas we no longer need to simulate
-        var i = this.splatAreas.length;
-        while (i--) {
-            if (this.frameNumber - this.splatAreas[i].frameNumber > FRAMES_TO_SIMULATE) {
-                this.splatAreas.splice(i, 1);
-            }
-        }
 
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.pressureTexture, 0);
+			wgl.clear(
+				wgl.createClearState().bindFramebuffer(this.simulationFramebuffer),
+				wgl.COLOR_BUFFER_BIT);
 
-        if (this.splatAreas.length === 0) { //if we finished simulating on this step
-            this.clearTextures(this.velocityTexture, this.velocityTextureTemp); //clear all velocity textures
-        }
+		for (var i = 0; i < PRESSURE_JACOBI_ITERATIONS; ++i) {
+			wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.pressureTextureTemp, 0);
+			jacobiDrawState.uniformTexture('u_pressureTexture', 0, wgl.TEXTURE_2D, this.pressureTexture);
 
+			wgl.drawArrays(jacobiDrawState, wgl.TRIANGLE_STRIP, 0, 4);
 
-        return true;
-    };
+			Utilities.swap(this, 'pressureTexture', 'pressureTextureTemp');
+		}
 
 
-    return Simulator;
+		//subtract pressure gradient from velocity
+
+		var subtractDrawState = wgl.createDrawState()
+			.bindFramebuffer(this.simulationFramebuffer)
+			.viewport(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+
+			.enable(wgl.SCISSOR_TEST)
+			.scissor(simulationArea.left, simulationArea.bottom, simulationArea.width, simulationArea.height)
+
+			.useProgram(this.subtractProgram)
+			.uniform2f('u_resolution', this.resolutionWidth, this.resolutionHeight)
+			.uniformTexture('u_pressureTexture', 0, wgl.TEXTURE_2D, this.pressureTexture)
+			.uniformTexture('u_velocityTexture', 1, wgl.TEXTURE_2D, this.velocityTexture)
+
+			.vertexAttribPointer(this.quadVertexBuffer, this.subtractProgram.getAttribLocation('a_position'), 2, wgl.FLOAT, false, 0, 0);
+
+
+		wgl.framebufferTexture2D(this.simulationFramebuffer, wgl.FRAMEBUFFER, wgl.COLOR_ATTACHMENT0, wgl.TEXTURE_2D, this.velocityTextureTemp, 0);
+
+		wgl.drawArrays(subtractDrawState, wgl.TRIANGLE_STRIP, 0, 4);
+
+		Utilities.swap(this, 'velocityTexture', 'velocityTextureTemp');
+
+
+
+		//advect paint
+		advect(this.velocityTexture, this.paintTexture, this.paintTextureTemp, DELTA_TIME, 1.0);
+		Utilities.swap(this, 'paintTexture', 'paintTextureTemp');
+
+		//advect velocity
+		advect(this.velocityTexture, this.velocityTexture, this.velocityTextureTemp, DELTA_TIME, this.fluidity);
+		Utilities.swap(this, 'velocityTexture', 'velocityTextureTemp');
+
+
+
+		this.frameNumber += 1;
+
+		//remove all of the splat areas we no longer need to simulate
+		var i = this.splatAreas.length;
+		while (i--) {
+			if (this.frameNumber - this.splatAreas[i].frameNumber > FRAMES_TO_SIMULATE) {
+				this.splatAreas.splice(i, 1);
+			}
+		}
+
+
+		if (this.splatAreas.length === 0) { //if we finished simulating on this step
+			this.clearTextures(this.velocityTexture, this.velocityTextureTemp); //clear all velocity textures
+		}
+
+
+		return true;
+	};
+
+
+	return Simulator;
 
 }());

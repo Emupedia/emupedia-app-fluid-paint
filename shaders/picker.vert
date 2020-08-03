@@ -11,9 +11,9 @@ uniform vec2 u_position;
 uniform vec2 u_dimensions;
 
 void main () {
-    v_coordinates = (a_position * 0.5 + 0.5) * u_resolution;
+	v_coordinates = (a_position * 0.5 + 0.5) * u_resolution;
 
-    vec2 screenPosition = u_position + (a_position * 0.5 + 0.5) * u_dimensions;
+	vec2 screenPosition = u_position + (a_position * 0.5 + 0.5) * u_dimensions;
 
-    gl_Position = vec4((screenPosition / u_screenResolution) * 2.0 - 1.0, 0.0, 1.0);
+	gl_Position = vec4((screenPosition / u_screenResolution) * 2.0 - 1.0, 0.0, 1.0);
 }
